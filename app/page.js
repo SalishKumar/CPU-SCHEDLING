@@ -6,14 +6,15 @@ import CpuTimelineChart from "@/components/CpuTimelineChart";
 
 export default function Home() {
   const algorithms = [
-    { name: "Shortest Remaining Time First", label: "SRTF" },
+    { name: "Shortest Remaining Time First with Quantum", label: "SRTF-Q" }
   ];
 
   const [cpu, setCpu] = useState(2);
+  const [quantum, setQuantum] = useState(1);
   const [jobs, setJobs] = useState([
     { id: 1, arrivalTime: "0", burstTime: "5" },
-    { id: 2, arrivalTime: "2", burstTime: "3" },
-    { id: 3, arrivalTime: "4", burstTime: "4" }
+    { id: 2, arrivalTime: "2", burstTime: "1.5" },
+    { id: 3, arrivalTime: "2", burstTime: "4" }
   ]);
   const [cpuTimeline, setCpuTimeline] = useState([]);
   const [selectedAlgorithm, setSelectedAlgorithm] = useState(algorithms[0].name);
@@ -42,6 +43,10 @@ export default function Home() {
       alert("Please enter a valid number of CPUs");
       return false;
     }
+    if (quantum <= 0) {
+      alert("Please enter a valid quantum value (minimum 1)");
+      return false;
+    }
     for (const job of jobs) {
       if (
         job.arrivalTime === undefined ||
@@ -62,19 +67,21 @@ export default function Home() {
 
   const calculateTimes = () => {
     if (!validateForm()) return;
+    calculateEventDrivenSRTF();
+  };
 
-    // Initialize CPUs. Each CPU stores its current job and a history of segments.
+  const calculateEventDrivenSRTF = () => {
     let cpus = [];
     for (let i = 0; i < cpu; i++) {
       cpus.push({
         id: i,
         currentJob: null,
-        currentSegmentStart: undefined,
-        history: []
+        quantumRemaining: quantum,
+        history: [],
+        currentSegmentStart: null,
       });
     }
 
-    // Prepare a working copy of jobs with additional fields
     let jobsCopy = jobs.map((job) => ({
       ...job,
       arrivalTime: Number(job.arrivalTime),
@@ -82,87 +89,109 @@ export default function Home() {
       remainingTime: Number(job.burstTime),
       startTime: undefined,
       endTime: undefined,
-      turnaroundTime: undefined
+      turnaroundTime: undefined,
+      added: false,
     }));
+    jobsCopy.sort((a, b) => a.arrivalTime - b.arrivalTime);
 
     let currentTime = 0;
-
-    // Continue simulation until all jobs are finished
-    while (jobsCopy.some(job => job.remainingTime > 0)) {
-      // Get jobs that have arrived and are not finished
-      const readyJobs = jobsCopy.filter(job => job.arrivalTime <= currentTime && job.remainingTime > 0);
-
-      // Preemption check: for each CPU, see if a new job should preempt the currently running job
-      cpus.forEach(cpuObj => {
-        if (cpuObj.currentJob) {
-          // Look for any ready job (other than the one currently running) with less remaining time
-          const candidate = readyJobs
-            .filter(job => job.id !== cpuObj.currentJob.id)
-            .sort((a, b) => a.remainingTime - b.remainingTime)[0];
-          if (candidate && candidate.remainingTime < cpuObj.currentJob.remainingTime) {
-            // Preempt current job: record its timeline segment and release the CPU
-            if (cpuObj.currentSegmentStart !== undefined) {
-              cpuObj.history.push({
-                start: cpuObj.currentSegmentStart,
-                end: currentTime,
-                job: cpuObj.currentJob.id
-              });
-            }
-            cpuObj.currentJob = null;
-            cpuObj.currentSegmentStart = undefined;
-          }
+    let readyQueue = [];
+    console.log("***** start *****");
+    let itearation = 1;
+    while (
+      jobsCopy.some(j => j.remainingTime > 0) ||
+      readyQueue.length > 0 ||
+      cpus.some(c => c.currentJob)
+    ) {
+      console.log("***** Iteration:", itearation++,"*****");
+      jobsCopy.forEach(job => {
+        if (!job.added && job.arrivalTime <= currentTime) {
+          readyQueue.push(job);
+          job.added = true;
+          console.log("Job added to readyQueue:", job.id);
         }
       });
 
-      // Determine which jobs are currently running on some CPU (to avoid duplicate assignment)
-      const runningJobIds = cpus
-        .filter(cpuObj => cpuObj.currentJob !== null)
-        .map(cpuObj => cpuObj.currentJob.id);
-
-      // Assign available jobs to idle CPUs
+      console.log("Current Time:", currentTime);
       cpus.forEach(cpuObj => {
-        if (!cpuObj.currentJob) {
-          // Find an available job (not already running) with the smallest remaining time
-          const availableJobs = readyJobs.filter(job => !runningJobIds.includes(job.id));
-          if (availableJobs.length > 0) {
-            const candidate = availableJobs.sort((a, b) => a.remainingTime - b.remainingTime)[0];
-            cpuObj.currentJob = candidate;
-            // Record the start time of the job if not set already
-            if (candidate.startTime === undefined) {
-              candidate.startTime = currentTime;
-            }
-            cpuObj.currentSegmentStart = currentTime;
-            runningJobIds.push(candidate.id);
+        if (!cpuObj.currentJob && readyQueue.length > 0) {
+          readyQueue.sort((a, b) => a.remainingTime - b.remainingTime);
+          const nextJob = readyQueue.shift();
+          cpuObj.currentJob = nextJob;
+          if (nextJob.startTime === undefined) {
+            nextJob.startTime = currentTime;
           }
+          cpuObj.currentSegmentStart = currentTime;
+          cpuObj.quantumRemaining = quantum;
+          console.log(`Assigned job ${nextJob.id} to CPU ${cpuObj.id}`);
         }
       });
 
-      // Execute one time unit on each CPU that has a job
+      let nextEventTime = Infinity;
       cpus.forEach(cpuObj => {
         if (cpuObj.currentJob) {
-          cpuObj.currentJob.remainingTime -= 1;
-          // If the job finishes, record its finish time and timeline segment
+          const timeToFinish = cpuObj.currentJob.remainingTime;
+          const timeToQuantumExpire = cpuObj.quantumRemaining;
+          console.log("quantmRemaining:", timeToQuantumExpire,"timeToFinish:", timeToFinish);
+          const cpuEvent = currentTime + Math.min(timeToFinish, timeToQuantumExpire);
+          if (cpuEvent < nextEventTime) {
+            nextEventTime = cpuEvent;
+          }
+        }
+      });
+      if (jobsCopy.some(j => !j.added)) {
+        const nextArrival = jobsCopy.find(j => !j.added).arrivalTime;
+        nextEventTime = Math.min(nextEventTime, nextArrival);
+      }
+
+      console.log("Next event time:", nextEventTime);
+      if (nextEventTime === Infinity) break;
+      let delta = nextEventTime - currentTime;
+      console.log("Delta:", delta);
+
+      cpus.forEach(cpuObj => {
+        if (cpuObj.currentJob) {
+          cpuObj.currentJob.remainingTime -= delta;
+          cpuObj.quantumRemaining -= delta;
+        }
+      });
+      currentTime = nextEventTime;
+
+      cpus.forEach(cpuObj => {
+        if (cpuObj.currentJob) {
           if (cpuObj.currentJob.remainingTime <= 0) {
-            cpuObj.currentJob.endTime = currentTime + 1;
+            console.log("-----Job finished on CPU:", cpuObj.id,currentTime,"Job:", cpuObj.currentJob.id);
+            cpuObj.currentJob.endTime = currentTime;
             cpuObj.currentJob.turnaroundTime = cpuObj.currentJob.endTime - cpuObj.currentJob.arrivalTime;
             cpuObj.history.push({
               start: cpuObj.currentSegmentStart,
-              end: currentTime + 1,
-              job: cpuObj.currentJob.id
+              end: currentTime,
+              job: cpuObj.currentJob.id,
             });
             cpuObj.currentJob = null;
-            cpuObj.currentSegmentStart = undefined;
+            cpuObj.currentSegmentStart = null;
+            cpuObj.quantumRemaining = quantum;
+          }
+          else if (cpuObj.quantumRemaining <= 0) {
+            console.log("-----Quantum expired on CPU:", cpuObj.id,currentTime,"Job:", cpuObj.currentJob.id);
+            cpuObj.history.push({
+              start: cpuObj.currentSegmentStart,
+              end: currentTime,
+              job: cpuObj.currentJob.id,
+            });
+            readyQueue.push(cpuObj.currentJob);
+            cpuObj.currentJob = null;
+            cpuObj.currentSegmentStart = null;
+            cpuObj.quantumRemaining = quantum;
           }
         }
       });
-
-      // Advance time by 1 time unit
-      currentTime++;
+      console.log("**** ieration end ****");
     }
-
-    // Update jobs state with the calculated times and update the CPU timeline for visualization
-    setJobs(jobsCopy);
+    console.log("***** end *****");
     setCpuTimeline(cpus);
+    setJobs(jobsCopy);
+    console.log("Jobs after calculation:", cpus);
   };
 
   const deleteJob = (jobId) => {
@@ -171,7 +200,21 @@ export default function Home() {
 
   return (
     <div className={styles.page}>
-      <h1>CPU Scheduling (SRTF)</h1>
+      <h1>CPU Scheduling (SRTF with Quantum)</h1>
+      <div className={styles.group}>
+        <label htmlFor="algorithm">Select Algorithm</label>
+        <select
+          id="algorithm"
+          value={selectedAlgorithm}
+          onChange={(e) => setSelectedAlgorithm(e.target.value)}
+        >
+          {algorithms.map((algorithm) => (
+            <option key={algorithm.name} value={algorithm.name}>
+              {algorithm.label}
+            </option>
+          ))}
+        </select>
+      </div>
       <div className={styles.group}>
         <label htmlFor="cpus">Enter number of CPUs</label>
         <input
@@ -183,7 +226,17 @@ export default function Home() {
           placeholder="Enter number of CPUs"
         />
       </div>
-      {/* For SRTF, no quantum input is needed */}
+      <div className={styles.group}>
+        <label htmlFor="quantum">Enter quantum duration (time units)</label>
+        <input
+          type="number"
+          min="1"
+          id="quantum"
+          value={quantum}
+          onChange={(e) => setQuantum(Number(e.target.value))}
+          placeholder="Enter quantum duration"
+        />
+      </div>
       <div className={styles.group}>
         <button
           className={styles.button}
@@ -194,10 +247,13 @@ export default function Home() {
         >
           Add JOB
         </button>
-        <button className={styles.button} onClick={() => {
-          setJobs([]);
-          setCpuTimeline([]);
-        }}>
+        <button
+          className={styles.button}
+          onClick={() => {
+            setJobs([]);
+            setCpuTimeline([]);
+          }}
+        >
           Clear
         </button>
         <button className={styles.button} onClick={calculateTimes}>
@@ -249,9 +305,7 @@ export default function Home() {
           ))}
         </tbody>
       </table>
-      {cpuTimeline.length > 0 && (
-        <CpuTimelineChart cpus={cpuTimeline} />
-      )}
+      {cpuTimeline.length > 0 && <CpuTimelineChart cpus={cpuTimeline} />}
     </div>
   );
 }
