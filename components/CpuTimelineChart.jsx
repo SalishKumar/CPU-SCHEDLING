@@ -84,7 +84,7 @@ export default function CpuTimelineChart({ cpus }) {
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
       <h3 style={{ margin: 0, padding: '0.5rem', backgroundColor: '#f5f5f5' }}>
-        CPU Timeline Visualization (vis-timeline)
+        CPU Timeline Visualization 
       </h3>
       <div
         ref={timelineRef}
