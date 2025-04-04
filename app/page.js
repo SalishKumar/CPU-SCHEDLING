@@ -1,14 +1,13 @@
 'use client';
-import Image from "next/image";
 import styles from "./page.module.css";
 import { useState } from "react";
 import CpuTimelineChart from "@/components/CpuTimelineChart";
 
 export default function Home() {
   const algorithms = [
-    { name: "Shortest Remaining Time First with Quantum", label: "SRTF-Q" }
+    { name: "Shortest Remaining Time First with Quantum", label: "SRTF-Q" },
+    { name: "Round Robin", label: "RR" },
   ];
-
   const [cpu, setCpu] = useState(2);
   const [quantum, setQuantum] = useState(1);
   const [jobs, setJobs] = useState([
@@ -17,8 +16,8 @@ export default function Home() {
     { id: 3, arrivalTime: "2", burstTime: "4" }
   ]);
   const [cpuTimeline, setCpuTimeline] = useState([]);
+  const [readyQueueHistory, setReadyQueueHistory] = useState([]);
   const [selectedAlgorithm, setSelectedAlgorithm] = useState(algorithms[0].name);
-
   const colTable = [
     "Job ID",
     "Arrival Time",
@@ -28,16 +27,14 @@ export default function Home() {
     "Turnaround Time",
     "Action"
   ];
-
   const handleInputChange = (e, jobId, field) => {
     const value = e.target.value;
-    setJobs((prevJobs) =>
-      prevJobs.map((job) =>
+    setJobs(prevJobs =>
+      prevJobs.map(job =>
         job.id === jobId ? { ...job, [field]: value } : job
       )
     );
   };
-
   const validateForm = () => {
     if (cpu <= 0) {
       alert("Please enter a valid number of CPUs");
@@ -64,25 +61,31 @@ export default function Home() {
     }
     return true;
   };
-
   const calculateTimes = () => {
     if (!validateForm()) return;
-    calculateEventDrivenSRTF();
+    if (selectedAlgorithm === "Shortest Remaining Time First with Quantum") {
+      calculateEventDrivenSRTF();
+    }
+    else if (selectedAlgorithm === "Round Robin") {
+      calculateRoundRobin();
+    }
+    else {
+      alert("Please select a valid algorithm.");
+    }
   };
-
   const calculateEventDrivenSRTF = () => {
-    let cpus = [];
+    const cpus = [];
     for (let i = 0; i < cpu; i++) {
       cpus.push({
         id: i,
         currentJob: null,
         quantumRemaining: quantum,
         history: [],
-        currentSegmentStart: null,
+        currentSegmentStart: null
       });
     }
-
-    let jobsCopy = jobs.map((job) => ({
+  
+    const jobsCopy = jobs.map(job => ({
       ...job,
       arrivalTime: Number(job.arrivalTime),
       burstTime: Number(job.burstTime),
@@ -90,29 +93,32 @@ export default function Home() {
       startTime: undefined,
       endTime: undefined,
       turnaroundTime: undefined,
-      added: false,
+      added: false
     }));
     jobsCopy.sort((a, b) => a.arrivalTime - b.arrivalTime);
-
+  
     let currentTime = 0;
     let readyQueue = [];
-    console.log("***** start *****");
-    let itearation = 1;
+    let readyQueueHistoryLocal = [];
+  
     while (
       jobsCopy.some(j => j.remainingTime > 0) ||
       readyQueue.length > 0 ||
       cpus.some(c => c.currentJob)
     ) {
-      console.log("***** Iteration:", itearation++,"*****");
       jobsCopy.forEach(job => {
         if (!job.added && job.arrivalTime <= currentTime) {
           readyQueue.push(job);
           job.added = true;
-          console.log("Job added to readyQueue:", job.id);
         }
       });
-
-      console.log("Current Time:", currentTime);
+  
+      let snapshot = {
+        start: currentTime,
+        end: null,
+        jobs: readyQueue.map(job => ({ id: job.id, remainingTime: job.remainingTime }))
+      };
+  
       cpus.forEach(cpuObj => {
         if (!cpuObj.currentJob && readyQueue.length > 0) {
           readyQueue.sort((a, b) => a.remainingTime - b.remainingTime);
@@ -123,17 +129,15 @@ export default function Home() {
           }
           cpuObj.currentSegmentStart = currentTime;
           cpuObj.quantumRemaining = quantum;
-          console.log(`Assigned job ${nextJob.id} to CPU ${cpuObj.id}`);
         }
       });
-
+  
       let nextEventTime = Infinity;
       cpus.forEach(cpuObj => {
         if (cpuObj.currentJob) {
-          const timeToFinish = cpuObj.currentJob.remainingTime;
-          const timeToQuantumExpire = cpuObj.quantumRemaining;
-          console.log("quantmRemaining:", timeToQuantumExpire,"timeToFinish:", timeToFinish);
-          const cpuEvent = currentTime + Math.min(timeToFinish, timeToQuantumExpire);
+          const finishTime = cpuObj.currentJob.remainingTime;
+          const quantumTime = cpuObj.quantumRemaining;
+          const cpuEvent = currentTime + Math.min(finishTime, quantumTime);
           if (cpuEvent < nextEventTime) {
             nextEventTime = cpuEvent;
           }
@@ -141,14 +145,139 @@ export default function Home() {
       });
       if (jobsCopy.some(j => !j.added)) {
         const nextArrival = jobsCopy.find(j => !j.added).arrivalTime;
-        nextEventTime = Math.min(nextEventTime, nextArrival);
+        if (nextArrival < nextEventTime) {
+          nextEventTime = nextArrival;
+        }
       }
-
-      console.log("Next event time:", nextEventTime);
       if (nextEventTime === Infinity) break;
-      let delta = nextEventTime - currentTime;
-      console.log("Delta:", delta);
+  
+      const delta = nextEventTime - currentTime;
+  
+      cpus.forEach(cpuObj => {
+        if (cpuObj.currentJob) {
+          cpuObj.currentJob.remainingTime -= delta;
+          cpuObj.quantumRemaining -= delta;
+        }
+      });
+  
+      currentTime = nextEventTime;
+  
+      cpus.forEach(cpuObj => {
+        if (cpuObj.currentJob) {
+          if (cpuObj.currentJob.remainingTime <= 0) {
+            cpuObj.currentJob.endTime = currentTime;
+            cpuObj.currentJob.turnaroundTime = cpuObj.currentJob.endTime - cpuObj.currentJob.arrivalTime;
+            cpuObj.history.push({
+              start: cpuObj.currentSegmentStart,
+              end: currentTime,
+              job: cpuObj.currentJob.id
+            });
+            cpuObj.currentJob = null;
+            cpuObj.currentSegmentStart = null;
+            cpuObj.quantumRemaining = quantum;
+          } else if (cpuObj.quantumRemaining <= 0) {
+            cpuObj.history.push({
+              start: cpuObj.currentSegmentStart,
+              end: currentTime,
+              job: cpuObj.currentJob.id
+            });
+            readyQueue.push(cpuObj.currentJob);
+            cpuObj.currentJob = null;
+            cpuObj.currentSegmentStart = null;
+            cpuObj.quantumRemaining = quantum;
+          }
+        }
+      });
+  
+      snapshot.end = currentTime;
+      if (snapshot.jobs.length > 0) {
+        readyQueueHistoryLocal.push(snapshot);
+      }
+    }
+  
+    setCpuTimeline(cpus);
+    setJobs(jobsCopy);
+    setReadyQueueHistory(readyQueueHistoryLocal);
+  };
 
+  const calculateRoundRobin = () => {
+    const cpus = [];
+    for (let i = 0; i < cpu; i++) {
+      cpus.push({
+        id: i,
+        currentJob: null,
+        quantumRemaining: quantum,
+        history: [],
+        currentSegmentStart: null,
+      });
+    }
+  
+    const jobsCopy = jobs.map(job => ({
+      ...job,
+      arrivalTime: Number(job.arrivalTime),
+      burstTime: Number(job.burstTime),
+      remainingTime: Number(job.burstTime),
+      startTime: undefined,
+      endTime: undefined,
+      turnaroundTime: undefined,
+      added: false,
+    }));
+    jobsCopy.sort((a, b) => a.arrivalTime - b.arrivalTime);
+  
+    let currentTime = 0;
+    let readyQueue = [];
+    let readyQueueHistoryLocal = [];
+  
+    while (
+      jobsCopy.some(j => j.remainingTime > 0) ||
+      readyQueue.length > 0 ||
+      cpus.some(c => c.currentJob)
+    ) {
+      jobsCopy.forEach(job => {
+        if (!job.added && job.arrivalTime <= currentTime) {
+          readyQueue.push(job);
+          job.added = true;
+        }
+      });
+  
+      let snapshot = {
+        start: currentTime,
+        end: null,
+        jobs: readyQueue.map(job => ({ id: job.id, remainingTime: job.remainingTime }))
+      };
+  
+      cpus.forEach(cpuObj => {
+        if (!cpuObj.currentJob && readyQueue.length > 0) {
+          const nextJob = readyQueue.shift();
+          cpuObj.currentJob = nextJob;
+          if (nextJob.startTime === undefined) {
+            nextJob.startTime = currentTime;
+          }
+          cpuObj.currentSegmentStart = currentTime;
+          cpuObj.quantumRemaining = quantum;
+        }
+      });
+  
+      let nextEventTime = Infinity;
+      cpus.forEach(cpuObj => {
+        if (cpuObj.currentJob) {
+          const timeSlice = Math.min(cpuObj.currentJob.remainingTime, cpuObj.quantumRemaining);
+          const eventTime = currentTime + timeSlice;
+          if (eventTime < nextEventTime) {
+            nextEventTime = eventTime;
+          }
+        }
+      });
+      const notAddedJobs = jobsCopy.filter(job => !job.added);
+      if (notAddedJobs.length > 0) {
+        const nextArrival = Math.min(...notAddedJobs.map(job => job.arrivalTime));
+        if (nextArrival < nextEventTime) {
+          nextEventTime = nextArrival;
+        }
+      }
+      if (nextEventTime === Infinity) break;
+      const delta = nextEventTime - currentTime;
+  
       cpus.forEach(cpuObj => {
         if (cpuObj.currentJob) {
           cpuObj.currentJob.remainingTime -= delta;
@@ -156,13 +285,12 @@ export default function Home() {
         }
       });
       currentTime = nextEventTime;
-
+  
       cpus.forEach(cpuObj => {
         if (cpuObj.currentJob) {
           if (cpuObj.currentJob.remainingTime <= 0) {
-            console.log("-----Job finished on CPU:", cpuObj.id,currentTime,"Job:", cpuObj.currentJob.id);
             cpuObj.currentJob.endTime = currentTime;
-            cpuObj.currentJob.turnaroundTime = cpuObj.currentJob.endTime - cpuObj.currentJob.arrivalTime;
+            cpuObj.currentJob.turnaroundTime = currentTime - cpuObj.currentJob.arrivalTime;
             cpuObj.history.push({
               start: cpuObj.currentSegmentStart,
               end: currentTime,
@@ -171,9 +299,7 @@ export default function Home() {
             cpuObj.currentJob = null;
             cpuObj.currentSegmentStart = null;
             cpuObj.quantumRemaining = quantum;
-          }
-          else if (cpuObj.quantumRemaining <= 0) {
-            console.log("-----Quantum expired on CPU:", cpuObj.id,currentTime,"Job:", cpuObj.currentJob.id);
+          } else if (cpuObj.quantumRemaining <= 0) {
             cpuObj.history.push({
               start: cpuObj.currentSegmentStart,
               end: currentTime,
@@ -186,18 +312,21 @@ export default function Home() {
           }
         }
       });
-      console.log("**** ieration end ****");
+  
+      snapshot.end = currentTime;
+      if (snapshot.jobs.length > 0) {
+        readyQueueHistoryLocal.push(snapshot);
+      }
     }
-    console.log("***** end *****");
+  
     setCpuTimeline(cpus);
     setJobs(jobsCopy);
-    console.log("Jobs after calculation:", cpus);
+    setReadyQueueHistory(readyQueueHistoryLocal);
   };
 
-  const deleteJob = (jobId) => {
-    setJobs(jobs.filter((job) => job.id !== jobId));
+  const deleteJob = jobId => {
+    setJobs(jobs.filter(job => job.id !== jobId));
   };
-
   return (
     <div className={styles.page}>
       <h1>CPU Scheduling (SRTF with Quantum)</h1>
@@ -206,9 +335,9 @@ export default function Home() {
         <select
           id="algorithm"
           value={selectedAlgorithm}
-          onChange={(e) => setSelectedAlgorithm(e.target.value)}
+          onChange={e => setSelectedAlgorithm(e.target.value)}
         >
-          {algorithms.map((algorithm) => (
+          {algorithms.map(algorithm => (
             <option key={algorithm.name} value={algorithm.name}>
               {algorithm.label}
             </option>
@@ -222,7 +351,7 @@ export default function Home() {
           min="1"
           id="cpus"
           value={cpu}
-          onChange={(e) => setCpu(Number(e.target.value))}
+          onChange={e => setCpu(Number(e.target.value))}
           placeholder="Enter number of CPUs"
         />
       </div>
@@ -233,7 +362,7 @@ export default function Home() {
           min="1"
           id="quantum"
           value={quantum}
-          onChange={(e) => setQuantum(Number(e.target.value))}
+          onChange={e => setQuantum(Number(e.target.value))}
           placeholder="Enter quantum duration"
         />
       </div>
@@ -252,6 +381,7 @@ export default function Home() {
           onClick={() => {
             setJobs([]);
             setCpuTimeline([]);
+            setReadyQueueHistory([]);
           }}
         >
           Clear
@@ -269,7 +399,7 @@ export default function Home() {
           </tr>
         </thead>
         <tbody>
-          {jobs.map((job) => (
+          {jobs.map(job => (
             <tr key={job.id}>
               <td>{job.id}</td>
               <td>
@@ -278,7 +408,7 @@ export default function Home() {
                   min="0"
                   placeholder="Arrival Time"
                   value={job.arrivalTime || ""}
-                  onChange={(e) => handleInputChange(e, job.id, "arrivalTime")}
+                  onChange={e => handleInputChange(e, job.id, "arrivalTime")}
                 />
               </td>
               <td>
@@ -287,7 +417,7 @@ export default function Home() {
                   min="0.1"
                   placeholder="Burst Time"
                   value={job.burstTime || ""}
-                  onChange={(e) => handleInputChange(e, job.id, "burstTime")}
+                  onChange={e => handleInputChange(e, job.id, "burstTime")}
                 />
               </td>
               <td>{job.startTime ?? "-"}</td>
@@ -305,7 +435,9 @@ export default function Home() {
           ))}
         </tbody>
       </table>
-      {cpuTimeline.length > 0 && <CpuTimelineChart cpus={cpuTimeline} />}
+      {(cpuTimeline.length > 0 || readyQueueHistory.length > 0) && (
+        <CpuTimelineChart cpus={cpuTimeline} readyQueueHistory={readyQueueHistory} />
+      )}
     </div>
   );
 }
