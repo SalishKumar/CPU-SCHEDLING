@@ -12,6 +12,10 @@ const getJobColor = jobId => {
   return colors[Number(jobId) % colors.length];
 };
 
+
+
+//deplo
+
 export default function CpuTimelineChart({ cpus, readyQueueHistory }) {
   const timelineRef = useRef(null);
   const timelineInstanceRef = useRef(null);
